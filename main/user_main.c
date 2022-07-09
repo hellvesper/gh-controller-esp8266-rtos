@@ -50,10 +50,10 @@ static const char *TAG = "main";
  * - read the sensor data, if connected.
  */
 
-//#define I2C_EXAMPLE_MASTER_SCL_IO           2                /*!< gpio number for I2C master clock */
-//#define I2C_EXAMPLE_MASTER_SDA_IO           14               /*!< gpio number for I2C master data  */
-#define I2C_EXAMPLE_MASTER_SCL_IO           5                /*!< gpio number for I2C master clock */
-#define I2C_EXAMPLE_MASTER_SDA_IO           4               /*!< gpio number for I2C master data  */
+#define I2C_EXAMPLE_MASTER_SCL_IO           12                /*!< gpio number for I2C master clock */
+#define I2C_EXAMPLE_MASTER_SDA_IO           14               /*!< gpio number for I2C master data  */
+//#define I2C_EXAMPLE_MASTER_SCL_IO           5                /*!< gpio number for I2C master clock */
+//#define I2C_EXAMPLE_MASTER_SDA_IO           4               /*!< gpio number for I2C master data  */
 #define I2C_EXAMPLE_MASTER_NUM              I2C_NUM_0        /*!< I2C port number for master dev */
 #define I2C_EXAMPLE_MASTER_TX_BUF_DISABLE   0                /*!< I2C master do not need buffer */
 #define I2C_EXAMPLE_MASTER_RX_BUF_DISABLE   0                /*!< I2C master do not need buffer */
@@ -77,28 +77,15 @@ static const char *TAG = "main";
 #define GYRO_CONFIG     0x1B
 #define ACCEL_CONFIG    0x1C
 #define ACCEL_XOUT_H    0x3B
-#define ACCEL_XOUT_L    0x3C
-#define ACCEL_YOUT_H    0x3D
-#define ACCEL_YOUT_L    0x3E
-#define ACCEL_ZOUT_H    0x3F
-#define ACCEL_ZOUT_L    0x40
-#define TEMP_OUT_H      0x41
-#define TEMP_OUT_L      0x42
-#define GYRO_XOUT_H     0x43
-#define GYRO_XOUT_L     0x44
-#define GYRO_YOUT_H     0x45
-#define GYRO_YOUT_L     0x46
-#define GYRO_ZOUT_H     0x47
-#define GYRO_ZOUT_L     0x48
-#define PWR_MGMT_1      0x6B
+
 #define WHO_AM_I        0x75  /*!< Command to read WHO_AM_I reg */
 
 /**
  * MSP430 I2C commands
  */
-#define CMD_TYPE_1_SLAVE 1
-#define CMD_TYPE_2_SLAVE 2
-#define PING             10
+#define CMD_SLAVE_GET_SENSORS   0xF0
+#define CMD_TYPE_2_SLAVE        2
+#define PING                    0xA0
 
 #define BUFFER_SIZE      20  // 20bytes
 #define CHANNELS         8
@@ -209,7 +196,7 @@ i2c_example_master_mpu6050_read(i2c_port_t i2c_num, uint8_t reg_address, uint8_t
     i2c_master_write_byte(cmd, MPU6050_SENSOR_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
     i2c_master_write_byte(cmd, reg_address, ACK_CHECK_EN);
     i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
+    ret = i2c_master_cmd_begin(0, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
 
     if (ret != ESP_OK) {
@@ -221,7 +208,7 @@ i2c_example_master_mpu6050_read(i2c_port_t i2c_num, uint8_t reg_address, uint8_t
     i2c_master_write_byte(cmd, MPU6050_SENSOR_ADDR << 1 | READ_BIT, ACK_CHECK_EN);
     i2c_master_read(cmd, data, data_len, LAST_NACK_VAL);
     i2c_master_stop(cmd);
-    ret = i2c_master_cmd_begin(i2c_num, cmd, 1000 / portTICK_RATE_MS);
+    ret = i2c_master_cmd_begin(0, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
 
     return ret;
@@ -293,31 +280,6 @@ static void i2c_task_ping(void *arg) {
     UBaseType_t uxHighWaterMark;
     uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
 
-    {
-        gpio_config_t io_conf;
-        //disable interrupt
-        io_conf.intr_type = GPIO_INTR_DISABLE;
-        //set as output mode
-        io_conf.mode = GPIO_MODE_OUTPUT_OD;
-        //bit mask of the pins that you want to set,e.g.GPIO15/16
-        io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-        //disable pull-down mode
-        io_conf.pull_down_en = 0;
-        //disable pull-up mode
-        io_conf.pull_up_en = 0;
-        //configure GPIO with the given settings
-        ret = gpio_config(&io_conf);
-        if (ret != ESP_OK)
-            ESP_LOGE("GPIO Configure ERR: %s", "%d", ret);
-
-        vTaskDelay(100 / portTICK_RATE_MS);
-//        gpio_set_level(GPIO_MSP_RST, 0);  // RST MSP
-//        vTaskDelay(500 / portTICK_RATE_MS); // wait till capacitor discharge
-//        gpio_set_level(GPIO_MSP_RST, 1);  // release RST PIN
-//        vTaskDelay(100 / portTICK_RATE_MS); // extra delay for MSP boot process
-
-    }
-
     ret = i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
     if (ret != ESP_OK)
         ESP_LOGE(TAG, "I2C Init ERROR \n");
@@ -326,7 +288,7 @@ static void i2c_task_ping(void *arg) {
         pong = 0;
         ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, PING, &pong, 1);
 
-        if (0x0C != pong) {
+        if (0xAA != pong) {
             error_count++;
         }
 
@@ -336,9 +298,9 @@ static void i2c_task_ping(void *arg) {
             ESP_LOGI(TAG, "error_count: %d\n", error_count);
             ESP_LOGD(TAG, "uxHighWaterMark: %d\n", uxHighWaterMark);
 
-            if (pong == 0x0C) {
-                if (I2C_MS_Task_Handler != NULL)
-                    xTaskNotifyGive(I2C_MS_Task_Handler);
+            if (pong == 0xAA) {
+                if (I2C_1S_Task_Handler != NULL)
+                    xTaskNotifyGive(I2C_1S_Task_Handler);
 //                if (I2C_1S_Task_Handler != NULL)
 //                    xTaskNotifyGive(I2C_1S_Task_Handler);
             } else {
@@ -354,13 +316,7 @@ static void i2c_task_ping(void *arg) {
             ESP_LOGD(TAG, "uxHighWaterMark: %d\n", uxHighWaterMark);
             ret = i2c_driver_delete(I2C_EXAMPLE_MASTER_NUM);
             if (ret == ESP_OK) {
-                vTaskDelay(100 / portTICK_RATE_MS);
-                gpio_set_level(GPIO_MSP_RST, 0);  // RST MSP
-                vTaskDelay(500 / portTICK_RATE_MS); // wait till capacitor discharge
-                gpio_set_level(GPIO_MSP_RST, 1);  // release RST PIN
-                vTaskDelay(100 / portTICK_RATE_MS); // extra delay for MSP boot process
                 i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
-
             } else
                 ESP_LOGE(TAG, "Can't delete driver.\n");
             vTaskDelay(100 / portTICK_RATE_MS);
@@ -386,7 +342,7 @@ static void i2c_task_ticks_ms(void *arg) {
 
     while (1) {
         xTaskNotifyWait(pdFALSE, UINT_LEAST32_MAX, NULL, portMAX_DELAY);
-        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, CMD_TYPE_1_SLAVE, data_buffer, CHANNELS * 2);
+        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, CMD_TYPE_2_SLAVE, data_buffer, CHANNELS * 2);
 
         if (ret == ESP_OK) {
             for (int j = 0; j < CHANNELS; ++j) {
@@ -398,7 +354,7 @@ static void i2c_task_ticks_ms(void *arg) {
             ESP_LOGI(TAG, "TICKS20MS #1: %d | #2: %d | #3: %d | #4: %d | #5: %d | #6: %d | #7: %d | #8: %d",
                      data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7]);
         } else {
-            ESP_LOGE(TAG, "No ack, sensor not connected...skip...\n");
+            ESP_LOGE(TAG, "No ack, %d\n", ret);
         }
         ESP_LOGD(TAG, "uxHighWaterMark: %d\n", uxHighWaterMark);
         ESP_LOGD(TAG, "MinFreeHeap: %d\n", esp_get_minimum_free_heap_size());
@@ -423,7 +379,8 @@ static void i2c_task_ticks_sec(void *arg) {
 //    i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
 
     while (1) {
-        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, CMD_TYPE_2_SLAVE, data_buffer, CHANNELS * 2);
+        xTaskNotifyWait(pdFALSE, UINT_LEAST32_MAX, NULL, portMAX_DELAY);
+        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, CMD_SLAVE_GET_SENSORS, data_buffer, CHANNELS * 2);
 
         if (ret == ESP_OK) {
             for (int j = 0; j < CHANNELS; ++j) {
@@ -476,6 +433,6 @@ void app_main(void) {
     //start i2c task
 //    xTaskCreate(i2c_task_example, "i2c_task_example", 2048, NULL, 10, NULL);
     xTaskCreate(i2c_task_ping, "i2c_task_example", 1024, NULL, 11, NULL);
-    xTaskCreate(i2c_task_ticks_ms, "i2c_task_ticks_ms", 2048, NULL, 10, &I2C_MS_Task_Handler);
-//    xTaskCreate(i2c_task_ticks_sec, "i2c_task_ticks_sec", 2048, NULL, 10, &I2C_1S_Task_Handler);
+//    xTaskCreate(i2c_task_ticks_ms, "i2c_task_ticks_ms", 2048, NULL, 10, &I2C_MS_Task_Handler);
+    xTaskCreate(i2c_task_ticks_sec, "i2c_task_ticks_sec", 2048, NULL, 10, &I2C_1S_Task_Handler);
 }

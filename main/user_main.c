@@ -1,4 +1,3 @@
-#include <sys/cdefs.h>
 /* I2C example
 
    This example code is in the Public Domain (or CC0 licensed, at your option.)
@@ -7,7 +6,6 @@
    software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
    CONDITIONS OF ANY KIND, either express or implied.
 */
-
 
 #include <stdio.h>
 #include <stdint.h>
@@ -89,40 +87,52 @@ static const char *MQTT_TAG = "MQTT_EXAMPLE";
 /**
  * Define the mpu6050 register address:
  */
-#define SMPLRT_DIV      0x19
-#define CONFIG          0x1A
-#define GYRO_CONFIG     0x1B
-#define ACCEL_CONFIG    0x1C
 #define ACCEL_XOUT_H    0x3B
-
 #define WHO_AM_I        0x75  /*!< Command to read WHO_AM_I reg */
 
 /**
- * MSP430 I2C commands
+ * STM32 I2C commands
  */
+#define PING                    0xA0
 #define CMD_SLAVE_GET_SENSORS   0xF0
 #define CMD_TYPE_2_SLAVE        2
-#define PING                    0xA0
+#define CMD_PUMP_SPEED          0xD0
 
 /**
  * MQTT DEFINES
  */
 #define MQTT_BROKER_URL     MQTT_URI
 
-#define BUFFER_SIZE      20  // 20bytes
-#define CHANNELS         8
+#define BUFFER_SIZE         20  // 20bytes
+#define CHANNELS            8
+#define TOPIC_VALVE_STATUS  "gh/valve_status"
+#define TOPIC_VALVE_CONTROL "gh/valve_control"
+#define TOPIC_PUMP_STATUS   "gh/pump_status"
+#define TOPIC_PUMP_CONTROL  "gh/pump_control"
+#define TOPIC_PUMP_SPEED    "gh/pump_speed"
+#define TOPIC_FLOW_LS       "gh/flow"
 
 #define GPIO_MSP_RST    12
 //#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<GPIO_OUTPUT_IO_0) | (1ULL<<GPIO_OUTPUT_IO_1)) // example
 #define GPIO_OUTPUT_PIN_SEL  (1ULL<<GPIO_MSP_RST)
 
+typedef enum {
+    DISCONNECTED = 0,
+    CONNECTED
+} mqtt_state_t;
+
 static TaskHandle_t I2C_MS_Task_Handler = NULL;
 static TaskHandle_t I2C_1S_Task_Handler = NULL;
+static esp_mqtt_client_handle_t client;
+static mqtt_state_t mqtt_state = DISCONNECTED;
+static uint8_t valve_state = 0;
+static uint8_t pump_state = 0;
+static uint8_t pump_speed = 50; // 0 .. 100 percents
 
 /**
  * @brief i2c master initialization
  */
-static esp_err_t i2c_example_master_init() {
+static esp_err_t i2c_master_init() {
     int i2c_master_port = I2C_EXAMPLE_MASTER_NUM;
     i2c_config_t conf;
     conf.mode = I2C_MODE_MASTER;
@@ -156,7 +166,7 @@ static esp_err_t i2c_example_master_init() {
  *     - ESP_ERR_INVALID_STATE I2C driver not installed or not in master mode.
  *     - ESP_ERR_TIMEOUT Operation timeout because the bus is busy.
  */
-//static esp_err_t i2c_example_master_mpu6050_write(i2c_port_t i2c_num, uint8_t reg_address, uint8_t *data, size_t data_len)
+//static esp_err_t i2c_master_write_seq(i2c_port_t i2c_num, uint8_t reg_address, uint8_t *data, size_t data_len)
 //{
 //    int ret;
 //    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -171,7 +181,7 @@ static esp_err_t i2c_example_master_init() {
 //    return ret;
 //}
 static esp_err_t
-i2c_example_master_mpu6050_write(i2c_port_t i2c_num, uint8_t reg_address, uint8_t *data, size_t data_len) {
+i2c_master_write_seq(i2c_port_t i2c_num, uint8_t reg_address, uint8_t *data, size_t data_len) {
     int ret;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
@@ -211,7 +221,7 @@ i2c_example_master_mpu6050_write(i2c_port_t i2c_num, uint8_t reg_address, uint8_
  *     - ESP_ERR_TIMEOUT Operation timeout because the bus is busy.
  */
 static esp_err_t
-i2c_example_master_mpu6050_read(i2c_port_t i2c_num, uint8_t reg_address, uint8_t *data, size_t data_len) {
+i2c_master_read_seq(i2c_port_t i2c_num, uint8_t reg_address, uint8_t *data, size_t data_len) {
     int ret;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
@@ -236,20 +246,20 @@ i2c_example_master_mpu6050_read(i2c_port_t i2c_num, uint8_t reg_address, uint8_t
     return ret;
 }
 
-static esp_err_t i2c_example_master_mpu6050_init(i2c_port_t i2c_num) {
+static esp_err_t i2c_master_init_stm32(i2c_port_t i2c_num) {
 //    uint8_t cmd_data;
     vTaskDelay(100 / portTICK_RATE_MS);
-    i2c_example_master_init();
+    i2c_master_init();
 //    cmd_data = 0x00;    // reset mpu6050
-//    ESP_ERROR_CHECK(i2c_example_master_mpu6050_write(i2c_num, PWR_MGMT_1, &cmd_data, 1));
+//    ESP_ERROR_CHECK(i2c_master_write_seq(i2c_num, PWR_MGMT_1, &cmd_data, 1));
 //    cmd_data = 0x07;    // Set the SMPRT_DIV
-//    ESP_ERROR_CHECK(i2c_example_master_mpu6050_write(i2c_num, SMPLRT_DIV, &cmd_data, 1));
+//    ESP_ERROR_CHECK(i2c_master_write_seq(i2c_num, SMPLRT_DIV, &cmd_data, 1));
 //    cmd_data = 0x06;    // Set the Low Pass Filter
-//    ESP_ERROR_CHECK(i2c_example_master_mpu6050_write(i2c_num, CONFIG, &cmd_data, 1));
+//    ESP_ERROR_CHECK(i2c_master_write_seq(i2c_num, CONFIG, &cmd_data, 1));
 //    cmd_data = 0x18;    // Set the GYRO range
-//    ESP_ERROR_CHECK(i2c_example_master_mpu6050_write(i2c_num, GYRO_CONFIG, &cmd_data, 1));
+//    ESP_ERROR_CHECK(i2c_master_write_seq(i2c_num, GYRO_CONFIG, &cmd_data, 1));
 //    cmd_data = 0x01;    // Set the ACCEL range
-//    ESP_ERROR_CHECK(i2c_example_master_mpu6050_write(i2c_num, ACCEL_CONFIG, &cmd_data, 1));
+//    ESP_ERROR_CHECK(i2c_master_write_seq(i2c_num, ACCEL_CONFIG, &cmd_data, 1));
     return ESP_OK;
 }
 
@@ -260,28 +270,28 @@ static void i2c_task_example(void *arg) {
     static uint32_t error_count = 0;
     int ret;
 
-    i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
+    i2c_master_init_stm32(I2C_EXAMPLE_MASTER_NUM);
 
     while (1) {
         who_am_i = 0;
-        i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, WHO_AM_I, &who_am_i, 1);
+        i2c_master_read_seq(I2C_EXAMPLE_MASTER_NUM, WHO_AM_I, &who_am_i, 1);
 
         if (0x68 != who_am_i) {
             error_count++;
         }
 
         memset(sensor_data, 0, 14);
-        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, ACCEL_XOUT_H, sensor_data, 14);
+        ret = i2c_master_read_seq(I2C_EXAMPLE_MASTER_NUM, ACCEL_XOUT_H, sensor_data, 14);
 
         if (ret == ESP_OK) {
             ESP_LOGI(I2C_TAG, "*******************\n");
             ESP_LOGI(I2C_TAG, "WHO_AM_I: 0x%02x\n", who_am_i);
-            Temp = 36.53 + ((double) (int16_t) ((sensor_data[6] << 8) | sensor_data[7]) / 340);
-            ESP_LOGI(I2C_TAG, "TEMP: %d.%d\n", (uint16_t) Temp, (uint16_t) (Temp * 100) % 100);
+            Temp = 36.53 + ((double) (int16_t)((sensor_data[6] << 8) | sensor_data[7]) / 340);
+            ESP_LOGI(I2C_TAG, "TEMP: %d.%d\n", (uint16_t) Temp, (uint16_t)(Temp * 100) % 100);
 
             for (i = 0; i < 7; i++) {
                 ESP_LOGI(I2C_TAG, "sensor_data[%d]: %d\n", i,
-                         (int16_t) ((sensor_data[i * 2] << 8) | sensor_data[i * 2 + 1]));
+                         (int16_t)((sensor_data[i * 2] << 8) | sensor_data[i * 2 + 1]));
             }
 
             ESP_LOGI(I2C_TAG, "error_count: %d\n", error_count);
@@ -302,13 +312,13 @@ static void i2c_task_ping(void *arg) {
     UBaseType_t uxHighWaterMark;
     uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
 
-    ret = i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
+    ret = i2c_master_init_stm32(I2C_EXAMPLE_MASTER_NUM);
     if (ret != ESP_OK)
         ESP_LOGE(I2C_TAG, "I2C Init ERROR \n");
 
     while (1) {
         pong = 0;
-        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, PING, &pong, 1);
+        ret = i2c_master_read_seq(I2C_EXAMPLE_MASTER_NUM, PING, &pong, 1);
 
         if (0xAA != pong) {
             error_count++;
@@ -338,7 +348,7 @@ static void i2c_task_ping(void *arg) {
             ESP_LOGD(I2C_TAG, "uxHighWaterMark: %d\n", uxHighWaterMark);
             ret = i2c_driver_delete(I2C_EXAMPLE_MASTER_NUM);
             if (ret == ESP_OK) {
-                i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
+                i2c_master_init_stm32(I2C_EXAMPLE_MASTER_NUM);
             } else
                 ESP_LOGE(I2C_TAG, "Can't delete driver.\n");
             vTaskDelay(100 / portTICK_RATE_MS);
@@ -360,11 +370,11 @@ static void i2c_task_ticks_ms(void *arg) {
     UBaseType_t uxHighWaterMark;
     uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
 
-//    i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
+//    i2c_master_init_stm32(I2C_EXAMPLE_MASTER_NUM);
 
     while (1) {
         xTaskNotifyWait(pdFALSE, UINT_LEAST32_MAX, NULL, portMAX_DELAY);
-        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, CMD_TYPE_2_SLAVE, data_buffer, CHANNELS * 2);
+        ret = i2c_master_read_seq(I2C_EXAMPLE_MASTER_NUM, CMD_TYPE_2_SLAVE, data_buffer, CHANNELS * 2);
 
         if (ret == ESP_OK) {
             for (int j = 0; j < CHANNELS; ++j) {
@@ -394,14 +404,15 @@ static void i2c_task_ticks_sec(void *arg) {
     uint16_t data[CHANNELS];
 //    static uint32_t error_count = 0;
     int ret;
+    int msg_id = (int) NULL;
     UBaseType_t uxHighWaterMark;
     uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
 
-//    i2c_example_master_mpu6050_init(I2C_EXAMPLE_MASTER_NUM);
+//    i2c_master_init_stm32(I2C_EXAMPLE_MASTER_NUM);
 
     while (1) {
         xTaskNotifyWait(pdFALSE, UINT_LEAST32_MAX, NULL, portMAX_DELAY);
-        ret = i2c_example_master_mpu6050_read(I2C_EXAMPLE_MASTER_NUM, CMD_SLAVE_GET_SENSORS, data_buffer, CHANNELS * 2);
+        ret = i2c_master_read_seq(I2C_EXAMPLE_MASTER_NUM, CMD_SLAVE_GET_SENSORS, data_buffer, CHANNELS * 2);
 
         if (ret == ESP_OK) {
             for (int j = 0; j < CHANNELS; ++j) {
@@ -415,9 +426,41 @@ static void i2c_task_ticks_sec(void *arg) {
         } else {
             ESP_LOGE(I2C_TAG, "No ack, sensor not connected...skip...\n");
         }
+
+        /**
+         * PUMP SPEED WRITE
+         */
+        ret = i2c_master_write_seq(I2C_NUM_0, CMD_PUMP_SPEED, &pump_speed, 1);
+        if (ret == ESP_OK) {
+            ESP_LOGI(I2C_TAG, "Write PUMP speed successfully.\n");
+        } else
+            ESP_LOGE(I2C_TAG, "Write PUMP speed failed.\n");
         ESP_LOGD(I2C_TAG, "uxHighWaterMark: %d\n", uxHighWaterMark);
         ESP_LOGD(I2C_TAG, "MinFreeHeap: %d\n", esp_get_minimum_free_heap_size());
         ESP_LOGD(I2C_TAG, "FreeHeap: %d\n", esp_get_free_heap_size());
+
+        static char buff[20];
+        /**
+         * valve state publish
+         */
+        itoa(valve_state, buff, 10);
+        if (mqtt_state == CONNECTED) {
+            msg_id = esp_mqtt_client_publish(client, TOPIC_VALVE_STATUS, buff, 1, 0, 0);
+            ESP_LOGI(MQTT_TAG, "[TOPIC_VALVE_STATUS] sent publish successful, msg_id=%d", msg_id);
+        }
+        ESP_LOGI(MQTT_TAG, "[CLIENT STATE] MQTT state=%d", mqtt_state);
+
+        /**
+         * sensors data publish
+         */
+
+        /*
+         * flow data publish
+         */
+
+        /**
+         * pump state publish
+         */
 
         vTaskDelay(1000 / portTICK_RATE_MS);
         uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);
@@ -427,12 +470,15 @@ static void i2c_task_ticks_sec(void *arg) {
 }
 
 static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
-    esp_mqtt_client_handle_t client = event->client;
+    client = event->client;
+
     int msg_id;
     // your_context_t *context = event->context;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
+            mqtt_state = CONNECTED;
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_CONNECTED");
+
             msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
             ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
 
@@ -444,8 +490,12 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
 
             msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
             ESP_LOGI(MQTT_TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
+
+            msg_id = esp_mqtt_client_subscribe(client, "gh/valve_control", 0);
+            ESP_LOGI(MQTT_TAG, "sent subscribe successful, msg_id=%d", msg_id);
             break;
         case MQTT_EVENT_DISCONNECTED:
+            mqtt_state = DISCONNECTED;
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DISCONNECTED");
             break;
 
@@ -464,6 +514,32 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DATA");
             printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
             printf("DATA=%.*s\r\n", event->data_len, event->data);
+
+            // TODO replace to switch or if-else to reduce calculation
+            // Set valve state
+            if (strcmp(event->topic, TOPIC_VALVE_CONTROL) == 0) {
+                if (event->data_len == 1) {
+                    uint8_t data_tmp = (uint8_t) atoi(event->data);
+                    if (data_tmp == 0 || data_tmp == 1)
+                        valve_state = data_tmp;
+                }
+            }
+            if (strcmp(event->topic, TOPIC_PUMP_CONTROL) == 0) {
+                if (event->data_len == 1) {
+                    uint8_t data_tmp = (uint8_t) atoi(event->data);
+                    if (data_tmp == 0 || data_tmp == 1)
+                        pump_state = data_tmp;
+                }
+            }
+            if (strcmp(event->topic, TOPIC_PUMP_SPEED) == 0) {
+                if (event->data_len == 1) {
+                    uint8_t data_tmp = (uint8_t) atoi(event->data);
+                    if (data_tmp <= 100 && data_tmp >= 0)
+                        pump_speed = data_tmp;
+                    i2c_master_write_seq(I2C_NUM_0, CMD_PUMP_SPEED, &pump_speed, 1);
+                }
+            }
+
             break;
         case MQTT_EVENT_ERROR:
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_ERROR");
@@ -483,9 +559,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 static void mqtt_app_start(void) {
     esp_mqtt_client_config_t mqtt_cfg = {
             .uri = MQTT_BROKER_URL,
+            .disable_auto_reconnect = false,
+            .reconnect_timeout_ms = 10000,
+
     };
 
-    esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+    client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, client);
     esp_mqtt_client_start(client);
 }

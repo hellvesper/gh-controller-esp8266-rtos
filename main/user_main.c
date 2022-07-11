@@ -127,7 +127,7 @@ static esp_mqtt_client_handle_t client;
 static mqtt_state_t mqtt_state = DISCONNECTED;
 static uint8_t valve_state = 0;
 static uint8_t pump_state = 0;
-static uint8_t pump_speed = 50; // 0 .. 100 percents
+static uint8_t pump_speed = 0; // 0 .. 100 percents, 0 = OFF
 
 /**
  * @brief i2c master initialization
@@ -286,12 +286,12 @@ static void i2c_task_example(void *arg) {
         if (ret == ESP_OK) {
             ESP_LOGI(I2C_TAG, "*******************\n");
             ESP_LOGI(I2C_TAG, "WHO_AM_I: 0x%02x\n", who_am_i);
-            Temp = 36.53 + ((double) (int16_t)((sensor_data[6] << 8) | sensor_data[7]) / 340);
-            ESP_LOGI(I2C_TAG, "TEMP: %d.%d\n", (uint16_t) Temp, (uint16_t)(Temp * 100) % 100);
+            Temp = 36.53 + ((double) (int16_t) ((sensor_data[6] << 8) | sensor_data[7]) / 340);
+            ESP_LOGI(I2C_TAG, "TEMP: %d.%d\n", (uint16_t) Temp, (uint16_t) (Temp * 100) % 100);
 
             for (i = 0; i < 7; i++) {
                 ESP_LOGI(I2C_TAG, "sensor_data[%d]: %d\n", i,
-                         (int16_t)((sensor_data[i * 2] << 8) | sensor_data[i * 2 + 1]));
+                         (int16_t) ((sensor_data[i * 2] << 8) | sensor_data[i * 2 + 1]));
             }
 
             ESP_LOGI(I2C_TAG, "error_count: %d\n", error_count);
@@ -473,25 +473,29 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
     client = event->client;
 
     int msg_id;
+    char data_buff[16];
     // your_context_t *context = event->context;
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             mqtt_state = CONNECTED;
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_CONNECTED");
 
-            msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
-            ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
+//            msg_id = esp_mqtt_client_publish(client, "/topic/qos1", "data_3", 0, 1, 0);
+//            ESP_LOGI(MQTT_TAG, "sent publish successful, msg_id=%d", msg_id);
+//
+//            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+//            ESP_LOGI(MQTT_TAG, "sent subscribe successful, msg_id=%d", msg_id);
+//
+//            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
+//            ESP_LOGI(MQTT_TAG, "sent subscribe successful, msg_id=%d", msg_id);
+//
+//            msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
+//            ESP_LOGI(MQTT_TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
 
-            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos0", 0);
+            msg_id = esp_mqtt_client_subscribe(client, TOPIC_VALVE_CONTROL, 0);
             ESP_LOGI(MQTT_TAG, "sent subscribe successful, msg_id=%d", msg_id);
 
-            msg_id = esp_mqtt_client_subscribe(client, "/topic/qos1", 1);
-            ESP_LOGI(MQTT_TAG, "sent subscribe successful, msg_id=%d", msg_id);
-
-            msg_id = esp_mqtt_client_unsubscribe(client, "/topic/qos1");
-            ESP_LOGI(MQTT_TAG, "sent unsubscribe successful, msg_id=%d", msg_id);
-
-            msg_id = esp_mqtt_client_subscribe(client, "gh/valve_control", 0);
+            msg_id = esp_mqtt_client_subscribe(client, TOPIC_PUMP_SPEED, 0);
             ESP_LOGI(MQTT_TAG, "sent subscribe successful, msg_id=%d", msg_id);
             break;
         case MQTT_EVENT_DISCONNECTED:
@@ -514,30 +518,36 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
             ESP_LOGI(MQTT_TAG, "MQTT_EVENT_DATA");
             printf("TOPIC=%.*s\r\n", event->topic_len, event->topic);
             printf("DATA=%.*s\r\n", event->data_len, event->data);
+            strncpy(data_buff, event->data, event->data_len);
+            ESP_LOGW(MQTT_TAG, "DATA= %s", data_buff);
 
             // TODO replace to switch or if-else to reduce calculation
             // Set valve state
-            if (strcmp(event->topic, TOPIC_VALVE_CONTROL) == 0) {
+            if (strncmp(event->topic, TOPIC_VALVE_CONTROL, event->topic_len) == 0) {
                 if (event->data_len == 1) {
                     uint8_t data_tmp = (uint8_t) atoi(event->data);
                     if (data_tmp == 0 || data_tmp == 1)
                         valve_state = data_tmp;
                 }
             }
-            if (strcmp(event->topic, TOPIC_PUMP_CONTROL) == 0) {
+            if (strncmp(event->topic, TOPIC_PUMP_CONTROL, event->topic_len) == 0) {
                 if (event->data_len == 1) {
                     uint8_t data_tmp = (uint8_t) atoi(event->data);
                     if (data_tmp == 0 || data_tmp == 1)
                         pump_state = data_tmp;
                 }
             }
-            if (strcmp(event->topic, TOPIC_PUMP_SPEED) == 0) {
-                if (event->data_len == 1) {
-                    uint8_t data_tmp = (uint8_t) atoi(event->data);
-                    if (data_tmp <= 100 && data_tmp >= 0)
-                        pump_speed = data_tmp;
+            if (strncmp(event->topic, TOPIC_PUMP_SPEED, event->topic_len) == 0) {
+                ESP_LOGW(MQTT_TAG, "PUMP SPEED detected\n");
+                ESP_LOGW(MQTT_TAG, "PUMP SPEED = %d", atoi(data_buff));
+                ESP_LOGW(MQTT_TAG, "PUMP SPEED data len = %d", event->data_len);
+                uint8_t data_tmp = (uint8_t) atoi(data_buff);
+                if (data_tmp <= 100 && data_tmp >= 0) {
+                    pump_speed = data_tmp;
+                    ESP_LOGW(MQTT_TAG, "PUMP SPEED between accepted values = %d", data_tmp);
                     i2c_master_write_seq(I2C_NUM_0, CMD_PUMP_SPEED, &pump_speed, 1);
                 }
+
             }
 
             break;

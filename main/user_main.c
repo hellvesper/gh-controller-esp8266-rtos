@@ -40,7 +40,10 @@ static const char *I2C_TAG = "i2c";
 #include "mqtt_client.h"
 #include "mqtt_cred.h"
 
+
 static const char *MQTT_TAG = "MQTT_EXAMPLE";
+
+#include "bme280.h"
 
 /**
  * TEST CODE BRIEF
@@ -271,6 +274,8 @@ static void i2c_task_example(void *arg) {
     int ret;
 
     i2c_master_init_stm32(I2C_EXAMPLE_MASTER_NUM);
+
+    bme280_create();
 
     while (1) {
         who_am_i = 0;

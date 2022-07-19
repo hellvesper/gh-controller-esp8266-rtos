@@ -31,6 +31,7 @@ extern "C" {
 #endif
 
 typedef void *i2c_bus_handle_t;
+typedef void *i2c_bus_device_handle_t; /*!< i2c device handle */
 
 /**
  * @brief Create and init I2C bus and return a I2C bus handle
@@ -42,6 +43,28 @@ typedef void *i2c_bus_handle_t;
  *     - I2C bus handle
  */
 i2c_bus_handle_t i2c_bus_create(i2c_port_t port, i2c_config_t *conf);
+
+/**
+ * @brief Create an I2C device on specific bus.
+ *        Dynamic configuration must be enable to achieve multiple devices with different configs on a single bus.
+ *        menuconfig:Bus Options->I2C Bus Options->enable dynamic configuration
+ *
+ * @param bus_handle Point to the I2C bus handle
+ * @param dev_addr i2c device address
+ * @param clk_speed device specified clock frequency the i2c_bus will switch to during each transfer. 0 if use current bus speed.
+ * @return i2c_bus_device_handle_t return a device handle if created successfully, return NULL if failed.
+ */
+i2c_bus_device_handle_t i2c_bus_device_create(i2c_bus_handle_t bus_handle, uint8_t dev_addr, uint32_t clk_speed);
+
+/**
+ * @brief Delete and release the I2C device resource, i2c_bus_device_delete should be used in pairs with i2c_bus_device_create.
+ *
+ * @param p_dev_handle Point to the I2C device handle, if delete succeed handle will set to NULL.
+ * @return
+ *     - ESP_OK Success
+ *     - ESP_FAIL Fail
+ */
+esp_err_t i2c_bus_device_delete(i2c_bus_device_handle_t *p_dev_handle);
 
 /**
  * @brief Write bytes to I2C bus

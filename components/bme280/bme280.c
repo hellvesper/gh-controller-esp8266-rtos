@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 #include <stdio.h>
+//#include "freertos/FreeRTOS.h"
+//#include "freertos/task.h"
 #include "driver/i2c.h"
 #include "i2c_bus.h"
 #include "bme280.h"

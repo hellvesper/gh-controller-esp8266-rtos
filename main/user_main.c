@@ -23,7 +23,7 @@
 #include "esp_err.h"
 
 #include "driver/i2c.h"
-#include "bme280.h"
+//#include "bme280.h"
 
 
 static const char *I2C_TAG = "i2c";
@@ -43,8 +43,6 @@ static const char *I2C_TAG = "i2c";
 
 
 static const char *MQTT_TAG = "MQTT_EXAMPLE";
-
-//#include "bme280.h"
 
 /**
  * TEST CODE BRIEF
@@ -70,10 +68,10 @@ static const char *MQTT_TAG = "MQTT_EXAMPLE";
  * - read the sensor data, if connected.
  */
 
-//#define I2C_EXAMPLE_MASTER_SCL_IO           12                /*!< gpio number for I2C master clock */
-//#define I2C_EXAMPLE_MASTER_SDA_IO           14               /*!< gpio number for I2C master data  */
-#define I2C_EXAMPLE_MASTER_SCL_IO           5                /*!< gpio number for I2C master clock */
-#define I2C_EXAMPLE_MASTER_SDA_IO           4               /*!< gpio number for I2C master data  */
+#define I2C_EXAMPLE_MASTER_SCL_IO           12                /*!< gpio number for I2C master clock */
+#define I2C_EXAMPLE_MASTER_SDA_IO           14               /*!< gpio number for I2C master data  */
+//#define I2C_EXAMPLE_MASTER_SCL_IO           5                /*!< gpio number for I2C master clock */
+//#define I2C_EXAMPLE_MASTER_SDA_IO           4               /*!< gpio number for I2C master data  */
 #define I2C_EXAMPLE_MASTER_NUM              I2C_NUM_0        /*!< I2C port number for master dev */
 #define I2C_EXAMPLE_MASTER_TX_BUF_DISABLE   0                /*!< I2C master do not need buffer */
 #define I2C_EXAMPLE_MASTER_RX_BUF_DISABLE   0                /*!< I2C master do not need buffer */
@@ -275,8 +273,6 @@ static void i2c_task_example(void *arg) {
     int ret;
 
     i2c_master_init_stm32(I2C_EXAMPLE_MASTER_NUM);
-
-    bme280_create();
 
     while (1) {
         who_am_i = 0;

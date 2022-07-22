@@ -104,7 +104,7 @@ static const char *MQTT_TAG = "MQTT_EXAMPLE";
  * Timers
  */
 
-#define PUMP_MAX_WORKING_TIME   pdMS_TO_TICKS(1000 /* 1 sec */ * 60/* 1 min */ * 20) // 20 min delay
+#define PUMP_MAX_WORKING_TIME   pdMS_TO_TICKS(1000 /* 1 sec */ * 60/* 1 min */ * 10) // 10 min delay
 #define NUM_TIMERS 5
 
 /* An array to hold handles to the created timers. */
@@ -561,7 +561,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
                 ESP_LOGW(MQTT_TAG, "PUMP SPEED data len = %d", event->data_len);
                 uint8_t data_tmp = (uint8_t) atoi(data_buff);
                 if (data_tmp <= 100 && data_tmp >= 0) { // 0 - 100 (%)
-                    if (pump_speed == 0 && xTimerIsTimerActive(xTimers[PUMP_TIMER]) != pdTRUE) {
+                    if (pump_speed == 0 && data_tmp > 0 && xTimerIsTimerActive(xTimers[PUMP_TIMER]) != pdTRUE) {
                         if (xTimerStart(xTimers[PUMP_TIMER], 0) != pdPASS) {
                             /* The timer could not be set into the Active
                             state. */
@@ -627,6 +627,7 @@ void vTimerCallback(TimerHandle_t xTimer) {
             ESP_LOGW(I2C_TAG, "TIMER EXPIRED, PUMP SPEED set to 0, PUMP OFF");
             pump_speed = 0;
             i2c_master_write_seq(I2C_NUM_0, CMD_PUMP_SPEED, &pump_speed, 1);
+            esp_mqtt_client_publish(client, TOPIC_PUMP_SPEED, "0", 1, 0, 0);
             break;
         case WATERING_TIMER:
             //TODO close valve

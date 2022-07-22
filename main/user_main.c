@@ -17,6 +17,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/timers.h"
 
 #include "esp_log.h"
 #include "esp_system.h"
@@ -67,10 +68,10 @@ static const char *MQTT_TAG = "MQTT_EXAMPLE";
  * - read the sensor data, if connected.
  */
 
-#define I2C_EXAMPLE_MASTER_SCL_IO           12                /*!< gpio number for I2C master clock */
-#define I2C_EXAMPLE_MASTER_SDA_IO           14               /*!< gpio number for I2C master data  */
-//#define I2C_EXAMPLE_MASTER_SCL_IO           5                /*!< gpio number for I2C master clock */
-//#define I2C_EXAMPLE_MASTER_SDA_IO           4               /*!< gpio number for I2C master data  */
+//#define I2C_EXAMPLE_MASTER_SCL_IO           12                /*!< gpio number for I2C master clock */
+//#define I2C_EXAMPLE_MASTER_SDA_IO           14               /*!< gpio number for I2C master data  */
+#define I2C_EXAMPLE_MASTER_SCL_IO           5                /*!< gpio number for I2C master clock D1 */
+#define I2C_EXAMPLE_MASTER_SDA_IO           4               /*!< gpio number for I2C master data D2 */
 #define I2C_EXAMPLE_MASTER_NUM              I2C_NUM_0        /*!< I2C port number for master dev */
 #define I2C_EXAMPLE_MASTER_TX_BUF_DISABLE   0                /*!< I2C master do not need buffer */
 #define I2C_EXAMPLE_MASTER_RX_BUF_DISABLE   0                /*!< I2C master do not need buffer */
@@ -100,6 +101,16 @@ static const char *MQTT_TAG = "MQTT_EXAMPLE";
 #define CMD_PUMP_SPEED          0xD0
 
 /**
+ * Timers
+ */
+
+#define PUMP_MAX_WORKING_TIME   pdMS_TO_TICKS(1000 /* 1 sec */ * 60/* 1 min */ * 20) // 20 min delay
+#define NUM_TIMERS 5
+
+/* An array to hold handles to the created timers. */
+TimerHandle_t xTimers[NUM_TIMERS];
+
+/**
  * MQTT DEFINES
  */
 #define MQTT_BROKER_URL     MQTT_URI
@@ -121,6 +132,12 @@ typedef enum {
     DISCONNECTED = 0,
     CONNECTED
 } mqtt_state_t;
+
+enum xTIMERS {
+    PUMP_TIMER = 0,
+    WATERING_TIMER
+} eTimer;
+
 
 static TaskHandle_t I2C_MS_Task_Handler = NULL;
 static TaskHandle_t I2C_1S_Task_Handler = NULL;
@@ -287,12 +304,12 @@ static void i2c_task_example(void *arg) {
         if (ret == ESP_OK) {
             ESP_LOGI(I2C_TAG, "*******************\n");
             ESP_LOGI(I2C_TAG, "WHO_AM_I: 0x%02x\n", who_am_i);
-            Temp = 36.53 + ((double) (int16_t) ((sensor_data[6] << 8) | sensor_data[7]) / 340);
-            ESP_LOGI(I2C_TAG, "TEMP: %d.%d\n", (uint16_t) Temp, (uint16_t) (Temp * 100) % 100);
+            Temp = 36.53 + ((double) (int16_t)((sensor_data[6] << 8) | sensor_data[7]) / 340);
+            ESP_LOGI(I2C_TAG, "TEMP: %d.%d\n", (uint16_t) Temp, (uint16_t)(Temp * 100) % 100);
 
             for (i = 0; i < 7; i++) {
                 ESP_LOGI(I2C_TAG, "sensor_data[%d]: %d\n", i,
-                         (int16_t) ((sensor_data[i * 2] << 8) | sensor_data[i * 2 + 1]));
+                         (int16_t)((sensor_data[i * 2] << 8) | sensor_data[i * 2 + 1]));
             }
 
             ESP_LOGI(I2C_TAG, "error_count: %d\n", error_count);
@@ -534,7 +551,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
             if (strncmp(event->topic, TOPIC_PUMP_CONTROL, event->topic_len) == 0) {
                 if (event->data_len == 1) {
                     uint8_t data_tmp = (uint8_t) atoi(event->data);
-                    if (data_tmp == 0 || data_tmp == 1)
+                    if (data_tmp == 0 || data_tmp == 1) // can only be 0 or 1
                         pump_state = data_tmp;
                 }
             }
@@ -543,7 +560,14 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
                 ESP_LOGW(MQTT_TAG, "PUMP SPEED = %d", atoi(data_buff));
                 ESP_LOGW(MQTT_TAG, "PUMP SPEED data len = %d", event->data_len);
                 uint8_t data_tmp = (uint8_t) atoi(data_buff);
-                if (data_tmp <= 100 && data_tmp >= 0) {
+                if (data_tmp <= 100 && data_tmp >= 0) { // 0 - 100 (%)
+                    if (pump_speed == 0 && xTimerIsTimerActive(xTimers[PUMP_TIMER]) != pdTRUE) {
+                        if (xTimerStart(xTimers[PUMP_TIMER], 0) != pdPASS) {
+                            /* The timer could not be set into the Active
+                            state. */
+                            data_tmp = 0; // turn off pump
+                        }
+                    }
                     pump_speed = data_tmp;
                     ESP_LOGW(MQTT_TAG, "PUMP SPEED between accepted values = %d", data_tmp);
                     i2c_master_write_seq(I2C_NUM_0, CMD_PUMP_SPEED, &pump_speed, 1);
@@ -580,6 +604,37 @@ static void mqtt_app_start(void) {
     esp_mqtt_client_start(client);
 }
 
+/* Define a callback function that will be used by multiple timer
+ instances.  The callback function does nothing but count the number
+ of times the associated timer expires, and stop the timer once the
+ timer has expired 10 times.  The count is saved as the ID of the
+ timer. */
+void vTimerCallback(TimerHandle_t xTimer) {
+    const uint32_t ulMaxExpiryCountBeforeStopping = 10;
+    uint32_t TimID;
+
+    /* Optionally do something if the pxTimer parameter is NULL. */
+    configASSERT(xTimer)
+
+    /* The number of times this timer has expired is saved as the
+    timer's ID.  Obtain the count. */
+    TimID = (uint32_t) pvTimerGetTimerID(xTimer);
+
+    switch (TimID) {
+        case PUMP_TIMER:
+            ESP_LOGW(I2C_TAG, "TIMER EXPIRED, PUMP SPEED set to 0, PUMP OFF");
+            pump_speed = 0;
+            i2c_master_write_seq(I2C_NUM_0, CMD_PUMP_SPEED, &pump_speed, 1);
+            break;
+        case WATERING_TIMER:
+            //TODO close valve
+            break;
+        default:
+            break;
+    }
+}
+
+
 void app_main(void) {
     int ret;
     gpio_config_t io_conf;
@@ -604,6 +659,46 @@ void app_main(void) {
     gpio_set_level(GPIO_MSP_RST, 1);  // release RST PIN
     vTaskDelay(100 / portTICK_RATE_MS); // extra delay for MSP boot process
 
+    /* Create then start some timers.  Starting the timers before
+    the RTOS scheduler has been started means the timers will start
+    running immediately that the RTOS scheduler starts. */
+
+    xTimers[PUMP_TIMER] = xTimerCreate
+            ( /* Just a text name, not used by the RTOS
+                     kernel. */
+                    "PumpTimer",
+                    /* The timer period in ticks, must be
+                    greater than 0. */
+                    PUMP_MAX_WORKING_TIME,
+                    /* The timers will auto-reload themselves
+                    when they expire. */
+                    pdFALSE,
+                    /* The ID is used to store a count of the
+                    number of times the timer has expired, which
+                    is initialised to 0. */
+                    (void *) PUMP_TIMER,
+                    /* Each timer calls the same callback when
+                    it expires. */
+                    vTimerCallback
+            );
+    xTimers[WATERING_TIMER] = xTimerCreate("WateringTimer", PUMP_MAX_WORKING_TIME,
+                                           pdFALSE, (void *) WATERING_TIMER, vTimerCallback);
+
+    if (xTimers[PUMP_TIMER] == NULL) {
+        /* The timer was not created. */
+    }
+    /* Start the timer.  No block time is specified, and
+    even if one was it would be ignored because the RTOS
+    scheduler has not yet been started. */
+//    if (xTimerStart(xTimers[PUMP_TIMER], 0) != pdPASS) {
+//        /* The timer could not be set into the Active
+//        state. */
+//    }
+
+    /* ...
+    Create tasks here.
+    ... */
+
 
     //start i2c task
 //    xTaskCreate(i2c_task_example, "i2c_task_example", 2048, NULL, 10, NULL);
@@ -615,23 +710,23 @@ void app_main(void) {
     ESP_LOGI(MQTT_TAG, "[APP] Free memory: %d bytes", esp_get_free_heap_size());
     ESP_LOGI(MQTT_TAG, "[APP] IDF version: %s", esp_get_idf_version());
 
-    esp_log_level_set("*", ESP_LOG_INFO);
-    esp_log_level_set("MQTT_CLIENT", ESP_LOG_VERBOSE);
-    esp_log_level_set("MQTT_EXAMPLE", ESP_LOG_VERBOSE);
-    esp_log_level_set("TRANSPORT_TCP", ESP_LOG_VERBOSE);
-    esp_log_level_set("TRANSPORT_SSL", ESP_LOG_VERBOSE);
-    esp_log_level_set("TRANSPORT", ESP_LOG_VERBOSE);
-    esp_log_level_set("OUTBOX", ESP_LOG_VERBOSE);
+    esp_log_level_set("*", ESP_LOG_INFO)
+    esp_log_level_set("MQTT_CLIENT", ESP_LOG_VERBOSE)
+    esp_log_level_set("MQTT_EXAMPLE", ESP_LOG_VERBOSE)
+    esp_log_level_set("TRANSPORT_TCP", ESP_LOG_VERBOSE)
+    esp_log_level_set("TRANSPORT_SSL", ESP_LOG_VERBOSE)
+    esp_log_level_set("TRANSPORT", ESP_LOG_VERBOSE)
+    esp_log_level_set("OUTBOX", ESP_LOG_VERBOSE)
 
-    ESP_ERROR_CHECK(nvs_flash_init());
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(nvs_flash_init())
+    ESP_ERROR_CHECK(esp_netif_init())
+    ESP_ERROR_CHECK(esp_event_loop_create_default())
 
     /* This helper function configures Wi-Fi or Ethernet, as selected in menuconfig.
      * Read "Establishing Wi-Fi or Ethernet Connection" section in
      * examples/protocols/README.md for more information about this function.
      */
-    ESP_ERROR_CHECK(example_connect());
+    ESP_ERROR_CHECK(example_connect())
 
     mqtt_app_start();
 }

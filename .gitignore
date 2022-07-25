@@ -3,3 +3,4 @@
 /sdkconfig
 /protocol_examples_common/include/wifi_cred.h
 /main/mqtt_cred.h
+/components/bme280/cmake-build-debug/

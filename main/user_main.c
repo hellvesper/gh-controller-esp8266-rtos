@@ -599,11 +599,7 @@ void app_main(void) {
     if (ret != ESP_OK)
         ESP_LOGE("GPIO Configure ERR: %s", "%d", ret);
 
-    vTaskDelay(100 / portTICK_RATE_MS);
-    gpio_set_level(GPIO_MSP_RST, 0);  // RST MSP
-    vTaskDelay(500 / portTICK_RATE_MS); // wait till capacitor discharge
-    gpio_set_level(GPIO_MSP_RST, 1);  // release RST PIN
-    vTaskDelay(100 / portTICK_RATE_MS); // extra delay for MSP boot process
+
 
 
     //start i2c task
